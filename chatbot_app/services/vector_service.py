@@ -3,7 +3,6 @@ from pinecone import Pinecone, ServerlessSpec # Pinecone 관련 import
 from openai import OpenAI # OpenAI 클라이언트 사용
 from typing import List, Dict, Optional
 from datetime import datetime
-from .vector_service import get_pinecone_index, upsert_message, query_similar_messages 
 
 # --- 환경 변수 정의 ---
 # Render에서 설정한 환경 변수를 사용합니다.
