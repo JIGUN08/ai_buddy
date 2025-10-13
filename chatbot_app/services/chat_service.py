@@ -90,24 +90,27 @@ def _get_memory_contexts(user, user_message_text):
     # 0. 벡터 검색 컨텍스트
     vector_search_context = ""
     try:
-        collection = vector_service.get_or_create_collection()
-        # 유사 대화 검색 (결과 수와 길이 제한)
-        similar_results = vector_service.query_similar_messages(collection, user_message_text, user.id, n_results=5)
-        print(f"--- [디버그] Raw similar_results from vector_service: {similar_results} ---")
-        if similar_results and isinstance(similar_results, dict) and similar_results.get('documents'):
+        # [수정] Pinecone 인덱스 가져오기 (get_or_create_collection -> get_pinecone_index)
+        pinecone_index = vector_service.get_pinecone_index() 
+        
+        # [수정] Pinecone 버전의 query_similar_messages 호출 (인덱스 전달)
+        # Pinecone query_similar_messages는 이미 문자열 리스트를 반환합니다.
+        retrieved_docs = vector_service.query_similar_messages(pinecone_index, user_message_text, user.id, n_results=5)
+        
+        print(f"--- [디버그] Raw retrieved_docs from vector_service: {retrieved_docs} ---")
+        
+        # [수정] 반환된 문자열 리스트를 사용하여 컨텍스트 생성
+        if retrieved_docs:
             past_conversations = []
-            for doc, meta in zip(similar_results['documents'], similar_results['metadatas']):
-                speaker = "알 수 없음" # Default speaker
-                if isinstance(meta, dict):
-                    speaker = "알 수 없음" # Default speaker
-                if isinstance(meta, dict):
-                    speaker = "사용자" if meta.get('speaker') == 'user' else "AI"
+            for doc in retrieved_docs:
+                # doc는 이미 "사용자: 메시지" 또는 "AI: 메시지" 형태의 문자열
                 truncated_doc = (doc[:150] + '...') if len(doc) > 150 else doc
-                past_conversations.append(f"{speaker}: {truncated_doc}")
+                past_conversations.append(truncated_doc)
             
             if past_conversations:
                 vector_search_context = "[과거 관련 대화 내용(벡터DB): " + " | ".join(past_conversations) + "]"
                 print(f"--- [디버그] 벡터DB 유사도 검색 결과: {vector_search_context} ---")
+                
     except Exception as e:
         print(f"--- Could not build vector search context due to an error: {e} ---")
 
