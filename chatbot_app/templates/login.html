@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>아이 - 로그인</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f0f2f5;
+        }
+        .auth-container {
+            padding: 40px;
+            background-color: white;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .auth-container h1 {
+            margin-bottom: 20px;
+        }
+        .auth-container form p {
+            text-align: left;
+        }
+        .auth-container form input {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .auth-container button {
+            width: 100%;
+            padding: 10px;
+            border: none;
+            border-radius: 5px;
+            background-color: #5E35B1; /* 보라색 계열 */
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        .auth-container .switch-link {
+            margin-top: 20px;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-container">
+        <h1>'아이'와 대화하기</h1>
+        <form method="post">
+            {% csrf_token %}
+            {{ form.as_p }}
+            <button type="submit">로그인</button>
+        </form>
+        <a href="{% url 'signup' %}" class="switch-link">계정이 없으신가요? 회원가입</a>
+    </div>
+</body>
+</html>
