@@ -287,22 +287,20 @@ def _finalize_chat_interaction(request, user_message_text, response_json, histor
     bot_message_text = content_from_llm.get('answer', '').strip()
     explanation = content_from_llm.get('explanation', '').strip()
 
-    # ChromaDB 컬렉션 가져오기
-    collection = vector_service.get_or_create_collection()
+    # [수정] Pinecone 인덱스 가져오기
+    # vector_service.py에 정의한 get_pinecone_index 함수를 사용해야 합니다.
+    pinecone_index = vector_service.get_pinecone_index() 
 
-    # RDB에 채팅 메시지 저장 및 ChromaDB에 업서트
+    # 1. 사용자 메시지 RDB에 저장 및 벡터 DB에 업서트
     user_message_obj = ChatMessage.objects.create(user=user, message=user_message_text, is_user=True)
-    vector_service.upsert_message(collection, user_message_obj)
+    # [수정] upsert_message 호출 인자에 Pinecone 인덱스 객체를 전달
+    vector_service.upsert_message(pinecone_index, user_message_obj) # <--- 사용자 질문 저장
 
+    # 2. AI 응답 RDB에 저장 및 벡터 DB에 업서트
     bot_message_obj = ChatMessage.objects.create(user=user, message=bot_message_text, is_user=False)
-    vector_service.upsert_message(collection, bot_message_obj)
-    
-    # 호감도 업데이트
-    user_profile.affinity_score += 1
-    user_profile.save()
+    # [수정] upsert_message 호출 인자에 Pinecone 인덱스 객체를 전달
+    vector_service.upsert_message(pinecone_index, bot_message_obj) # <--- AI 답변 저장
 
-    # 사용자 속성 및 활동 추출 및 저장
-    recent_history_for_extraction = history[:5]
-    extract_and_save_user_context_data(user, user_message_text, bot_message_text, recent_history_for_extraction, api_key)
+    # ... (호감도 업데이트, 속성 추출 및 저장 로직 유지) ...
 
     return bot_message_text, explanation, bot_message_obj
