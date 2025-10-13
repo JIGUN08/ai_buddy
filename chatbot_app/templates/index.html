@@ -1,0 +1,55 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>츤데레 AI 비서</title>
+    <link rel="stylesheet" href="{% static 'style.css' %}">
+</head>
+<body>
+    <div class="container">
+        <div style="position: absolute; top: 20px; right: 20px; color: #333; background-color: rgba(255, 255, 255, 0.8); padding: 10px; border-radius: 5px; z-index: 100;">
+            <strong>{{ user.username }}</strong>님, 환영합니다.
+            <a href="{% url 'ai_status' %}" style="color: #5E35B1; text-decoration: none; font-weight: bold; margin-right: 10px;">아이 상태</a>
+            <a href="{% url 'logout' %}" style="color: #5E35B1; text-decoration: none; font-weight: bold; margin-left: 10px;">로그아웃</a>
+        </div>
+        <div class="chatbot-container">
+            <div class="character-display">
+                <img id="chatbot-character" src="{% static 'img/char_default.png' %}" alt="AI 비서">
+            </div>
+            <div class="chat-window">
+                <div id="chat-log" class="chat-log">
+                    {% for message in chat_messages %}
+                        <div class="message {% if message.is_user %}user-message{% else %}bot-message{% endif %}">
+                            <p>{{ message.message }}</p>
+                        </div>
+                    {% empty %}
+                        <div class="message bot-message">
+                            <p>... (삐빅) ... 흥, 드디어 왔네. 뭘 시킬 셈이야?</p>
+                        </div>
+                    {% endfor %}
+                </div>
+                <div class="chat-input">
+                    <input type="text" id="user-input" placeholder="메시지를 입력하세요...">
+                    <button id="send-button">전송</button>
+                </div>
+            </div>
+        </div>
+    </div>
+        {{ chat_messages|json_script:"chat_messages_data" }}
+        <script>
+        const chatHistory = JSON.parse(document.getElementById('chat_messages_data').textContent);
+        const STATIC_URLS = {
+            default: "{% static 'img/char_default.png' %}",
+            happy: "{% static 'img/char_happy.png' %}",
+            sad: "{% static 'img/char_sad.png' %}",
+            hungry: "{% static 'img/char_hungry.png' %}",
+            mischievous: "{% static 'img/char_mischievous.png' %}",
+            angry: "{% static 'img/char_angry.png' %}",
+            background: "{% static '픽셀p1.jpg' %}"
+        };
+    </script>
+    <script src="{% static 'script.js' %}"></script>
+</body>
+</html>
