@@ -87,13 +87,26 @@ def get_or_create_collection():
 
         # 5. 인덱스 존재 여부 확인 및 생성
         
-        # **[수정] 'argument of type 'method' is not iterable' 오류를 해결하기 위해 
-        # index names를 가져오는 방식을 명시적으로 분리합니다. (V3 SDK 권장 방식)**
-        index_list = pc.list_indexes()
-        index_names = index_list.names 
+        # list_indexes()의 반환 타입에 관계없이
+        # 인덱스 이름 목록을 안전하게 가져와서 호환성을 극대화합니다
+        index_list_response = pc.list_indexes()
+        
+        # 인덱스 목록에서 이름만 추출 (IndexList 객체의 .names 속성이 없을 경우를 대비한 안전 로직)
+        index_names = []
+        if hasattr(index_list_response, 'names'):
+            index_names = index_list_response.names
+        else:
+            # list_indexes()가 다른 구조를 반환하는 구형 SDK 버전을 위한 대체 로직
+            # IndexList 객체에 바로 접근하여 index name을 찾습니다.
+            try:
+                # v2/v3 SDK 이전 버전 호환성을 위해 리스트/딕셔너리 구조에서 이름 추출 시도
+                index_names = [idx['name'] for idx in index_list_response.get('indexes', [])]
+            except:
+                # .names 속성 자체에 문제가 있다면 빈 리스트로 처리
+                index_names = []
         
         # 5. 인덱스 존재 여부 확인 및 생성
-        if index_name not in pc.list_indexes().names:
+        if index_name not in index_names:
             print(f"Pinecone 인덱스 '{index_name}'가 존재하지 않아 새로 생성합니다.")
             pc.create_index(
                 name=index_name, 
