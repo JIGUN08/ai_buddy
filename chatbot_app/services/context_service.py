@@ -1,7 +1,6 @@
 from django.utils import timezone
 from datetime import timedelta
 from django.db.models import Count, Q
-from konlpy.tag import Okt
 from ..models import UserActivity
 
 def get_activity_recommendation(user, user_message):
@@ -34,11 +33,13 @@ def get_activity_recommendation(user, user_message):
 def search_activities_for_context(user, user_message):
     """
     사용자 메시지의 키워드를 바탕으로 UserActivity를 검색하여 컨텍스트를 생성합니다.
+    (konlpy 없이 공백 분리 키워드 사용)
     """
     try:
-        okt = Okt()
-        # 사용자 메시지에서 명사만 추출하여 검색 키워드로 사용
-        keywords = [word for word, pos in okt.pos(user_message, stem=True) if pos == 'Noun']
+        # [수정] konlpy 대신 사용자 메시지를 공백 기준으로 분리하여 키워드를 추출합니다.
+        # 이 방식은 정확도는 떨어지지만, 서버 실행 오류를 해결합니다.
+        # 영어 단어 또는 띄어쓰기가 잘 된 짧은 문장에서 효과적입니다.
+        keywords = [word for word in user_message.split() if len(word) > 1]
         
         if not keywords:
             return ""
@@ -50,7 +51,7 @@ def search_activities_for_context(user, user_message):
             query |= Q(place__icontains=keyword)
             query |= Q(companion__icontains=keyword)
 
-        # 현재 사용자의 기억만 대상으로 검색, 최근 순으로 3개까지
+        # 현재 사용자의 기억만 대상으로 검색, 최근 순으로 10개까지
         search_results = UserActivity.objects.filter(user=user).filter(query).order_by('-activity_date')[:10]
 
         if not search_results:
@@ -67,7 +68,7 @@ def search_activities_for_context(user, user_message):
             
             base_string += f"동행: {mem.companion or 'N/A'}, 메모: {mem.memo or 'N/A'})"
             result_strings.append(base_string)
-        
+            
         search_context = "[관련 기억 검색 결과: " + ", ".join(result_strings) + "]"
         return search_context
 
