@@ -1,56 +1,36 @@
-import os
-
 def analyze_emotion(bot_message_text):
     """
-    Analyzes the bot's message to determine the character's emotion.
-    Initializes KoNLPy's Okt tagger within the function to ensure JAVA_HOME is set.
+    봇 메시지 텍스트에서 감정 키워드를 찾아 캐릭터의 감정을 결정합니다.
+    KoNLPy나 외부 라이브러리 없이 문자열 검색으로 처리합니다.
     """
     character_emotion = "default"
-    try:
-        # Import locally to ensure JAVA_HOME is set by the time this is called
-        from konlpy.tag import Okt
-        okt = Okt()
-        
-        morphs = okt.pos(bot_message_text, stem=True)
-        print(f"\n--- Emotion Analysis Debug ---")
-        print(f"Bot Message: {bot_message_text}")
-        print(f"Morphs: {morphs}")
-        
-        emotion_keywords = {
-            "joy": ["기쁨", "행복", "좋다", "신나다", "재미있다", "즐겁다", "ㅋㅋ", "ㅎㅎ", "웃다", "웃어", "웃으니", "웃는다", "미소"],
-            "sad": ["슬픔", "우울", "힘들다", "속상하다", "눈물", "ㅠㅠ", "ㅜㅜ", "시무룩"],
-            "angry": ["화나다", "짜증", "열받다", "분노", "나쁘다"],
-            "mischievous": ["장난", "메롱", "짓궂다"],
-            "love": ["사랑", "좋아하다", "고맙다", "감사하다", "좋아"]
-        }
-        
-        detected_word = None
-        for word, pos in morphs:
-            if pos in ['Noun', 'Adjective', 'Verb']:
-                for emotion, keywords in emotion_keywords.items():
-                    if word in keywords:
-                        character_emotion = emotion
-                        detected_word = word
-                        break
-            if character_emotion != "default":
+    
+    # 메시지를 소문자로 변환하여 검색의 일관성을 확보합니다.
+    message = bot_message_text.lower()
+    
+    emotion_keywords = {
+        "joy": ["기쁨", "행복", "좋다", "신나", "재미", "즐겁다", "ㅋㅋ", "ㅎㅎ", "웃"], # '웃' 포함하여 웃다, 웃어 등 포괄
+        "sad": ["슬픔", "우울", "힘들다", "속상", "눈물", "ㅠㅠ", "ㅜㅜ", "시무룩"],
+        "angry": ["화나", "짜증", "열받", "분노", "나쁘다"],
+        "mischievous": ["장난", "메롱", "짓궂"],
+        "love": ["사랑", "고맙", "감사", "좋아"]
+    }
+
+    # 키워드 검색
+    for emotion, keywords in emotion_keywords.items():
+        for keyword in keywords:
+            if keyword in message:
+                character_emotion = emotion
                 break
-        
-        print(f"Detected Word: {detected_word}")
-        print(f"Detected Emotion (before mapping): {character_emotion}")
-        
-        # Map emotions to character states
-        if character_emotion == "joy":
-            character_emotion = "happy"
-        elif character_emotion == "love":
-            character_emotion = "mischievous"
-        # sad, angry, mischievous map directly
-
-        print(f"Final Emotion (after mapping): {character_emotion}")
-        print(f"--- End Debug ---")
-
-    except Exception as e:
-        print(f"--- KoNLPy/Emotion Analysis Error ---: {e}")
-        # In case of an error, we just return the default emotion
-        character_emotion = "default"
-        
+        if character_emotion != "default":
+            break
+            
+    # 감정 매핑 (기존 로직 유지)
+    if character_emotion == "joy":
+        character_emotion = "happy"
+    elif character_emotion == "love":
+        # 'love' 감정을 'mischievous'로 매핑하는 기존 로직 유지
+        character_emotion = "mischievous"
+    # sad, angry, mischievous, default는 그대로 유지
+    
     return character_emotion
