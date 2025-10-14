@@ -252,9 +252,6 @@ def _build_final_system_prompt(user, time_contexts, memory_contexts):
     )
 
     final_prompt = f"{finetuning_system_prompt}{rag_instructions_prompt}\n\n## 추가 컨텍스트 ##\n{current_time_context}\n{time_awareness_context}\n{memory_context}"
-    print("\n" + "="*20 + " LLM 전달 최종 프롬프트 시작 " + "="*20)
-    print(final_prompt)
-    print("="*20 + " LLM 전달 최종 프롬프트 끝 " + "="*22 + "\n")
     return final_prompt
 
 def _prepare_llm_messages(final_system_prompt, history, user_message_text):
