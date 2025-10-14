@@ -1,9 +1,13 @@
 import os
 import json
-from pinecone import Pinecone, ServerlessSpec # 기존 import는 유지
-from pinecone.exceptions import PineconeApiException # ApiException을 정확한 위치에서 가져옵니다.
+from pinecone import Pinecone, ServerlessSpec # 필요한 모듈 임포트
+from pinecone.exceptions import PineconeApiException # 최신 Pinecone SDK용 예외
 from openai import OpenAI, AuthenticationError # 필요한 모듈 임포트
 from typing import List, Dict, Union
+
+# Pinecone SDK v3+에서 예외 클래스 이름이 변경되어, 
+# 하위 호환성을 위해 'ApiException'으로 별칭(alias)을 지정합니다.
+ApiException = PineconeApiException 
 
 # --- 전역 변수 설정 ---
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
