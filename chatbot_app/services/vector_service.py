@@ -1,7 +1,7 @@
 import os
 import json
 from pinecone import Pinecone, ServerlessSpec # 필요한 모듈 임포트
-from pinecone.exceptions import PineconeApiException # 최신 Pinecone SDK용 예외
+from pinecone.exceptions import PineconeApiException 
 from openai import OpenAI, AuthenticationError # 필요한 모듈 임포트
 from typing import List, Dict, Union
 
@@ -10,7 +10,6 @@ from typing import List, Dict, Union
 ApiException = PineconeApiException 
 
 # --- 전역 상수 설정 ---
-# PINECONE_INDEX_NAME은 이제 get_or_create_collection() 내부에서 읽습니다.
 EMBEDDING_MODEL = "text-embedding-3-large"
 EMBEDDING_DIMENSION = 1024
 
@@ -83,12 +82,13 @@ def get_or_create_collection():
 
     try:
         # 4. Pinecone 클라이언트 초기화
+        # API 키를 명시적으로 인자로 전달하여 초기화 오류 가능성을 낮춥니다.
         pc = Pinecone(api_key=PINECONE_API_KEY)
-
+        
         # 5. 인덱스 존재 여부 확인 및 생성
         
-        # list_indexes()의 반환 타입에 관계없이
-        # 인덱스 이름 목록을 안전하게 가져와서 호환성을 극대화합니다
+        # **[최종 수정] list_indexes()의 반환 타입에 관계없이
+        # 인덱스 이름 목록을 안전하게 가져와서 호환성을 극대화합니다.**
         index_list_response = pc.list_indexes()
         
         # 인덱스 목록에서 이름만 추출 (IndexList 객체의 .names 속성이 없을 경우를 대비한 안전 로직)
@@ -105,7 +105,7 @@ def get_or_create_collection():
                 # .names 속성 자체에 문제가 있다면 빈 리스트로 처리
                 index_names = []
         
-        # 5. 인덱스 존재 여부 확인 및 생성
+        # 인덱스 존재 여부 최종 확인
         if index_name not in index_names:
             print(f"Pinecone 인덱스 '{index_name}'가 존재하지 않아 새로 생성합니다.")
             pc.create_index(
@@ -136,14 +136,12 @@ def upsert_message(pinecone_index, message_obj):
     RDB ChatMessage 객체를 임베딩하여 Pinecone 인덱스에 저장(Upsert)합니다.
     """
     if pinecone_index is None:
-        print("--- Pinecone 인덱스가 설정되지 않아 upsert를 건너킵니다. ---")
         return
         
     try:
-        # **[수정] Pinecone에 저장할 때는 RDB의 Primary Key(정수) 대신, 
+        # Pinecone에 저장할 때는 RDB의 Primary Key(정수) 대신, 
         # 사용자가 설정한 로그인 ID(username/email)를 사용합니다.
-        # 이렇게 하면 Pinecone 콘솔에서 '1' 대신 'user@example.com'과 같이 명확하게 보입니다.**
-        user_identifier = str(message_obj.user.username)
+        user_identifier = str(message_obj.user.username) 
         message_id = str(message_obj.id)
         
         # 1. 임베딩 생성
@@ -176,14 +174,13 @@ def upsert_message(pinecone_index, message_obj):
 
 
 def query_similar_messages(
-    # **[수정] 이제 정수 ID 대신 문자열 ID(username)를 필터링에 사용합니다.**
+    # 이제 정수 ID 대신 문자열 ID(username)를 필터링에 사용합니다.
     pinecone_index, query: str, user_identifier: str, n_results: int = 5
 ) -> Dict[str, Union[List[str], List[Dict]]]:
     """
     Pinecone에서 쿼리와 관련된 문서를 검색하고 ChatService의 예상 형식으로 반환합니다.
     """
     if pinecone_index is None:
-        print("--- Pinecone 인덱스가 설정되지 않아 문서 검색을 건너뛰고 빈 결과를 반환합니다. ---")
         return {"documents": [], "metadatas": []}
         
     try:
@@ -196,7 +193,7 @@ def query_similar_messages(
         results = pinecone_index.query(
             vector=query_embedding,
             top_k=n_results,
-             # **[수정] 저장된 문자열 ID(username)로 필터링합니다.**
+            # 저장된 문자열 ID(username)로 필터링합니다.
             filter={"user_id": user_identifier}, 
             include_metadata=True
         )
