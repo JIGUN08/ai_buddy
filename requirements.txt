@@ -20,7 +20,7 @@ pinecone-plugin-interface==0.0.7
 pip==25.2
 pydantic==2.11.9
 pydantic_core==2.33.2
-psycopg2-binary 
+psycopg2-binary
 python-dateutil==2.9.0.post0
 python-dotenv==1.1.1
 requests==2.32.5
