@@ -9,8 +9,8 @@ from typing import List, Dict, Union
 # 하위 호환성을 위해 'ApiException'으로 별칭(alias)을 지정합니다.
 ApiException = PineconeApiException 
 
-# --- 전역 변수 설정 ---
-PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
+# --- 전역 상수 설정 ---
+# PINECONE_INDEX_NAME은 이제 get_or_create_collection() 내부에서 읽습니다.
 EMBEDDING_MODEL = "text-embedding-3-large"
 EMBEDDING_DIMENSION = 1024
 
@@ -26,15 +26,12 @@ pinecone_index_instance = None
 def _get_openai_client() -> OpenAI:
     """
     OpenAI 클라이언트를 지연 초기화합니다.
-    (파일 로드 시 status 1 오류 방지)
     """
     global client_openai
     if client_openai is None:
         try:
-            # 환경 변수가 없으면 여기서 AuthenticationError 발생
             client_openai = OpenAI()
         except AuthenticationError as e:
-            # 환경 변수 오류를 명확한 EnvironmentError로 전환하여 처리
             raise EnvironmentError("OPENAI_API_KEY 환경 변수가 설정되지 않았거나 유효하지 않아 OpenAI 클라이언트 초기화에 실패했습니다.") from e
     return client_openai
 
@@ -50,10 +47,8 @@ def _get_embedding(text: str) -> List[float]:
         return response.data[0].embedding
         
     except EnvironmentError:
-        # _get_openai_client에서 발생한 환경 변수 오류를 상위로 전파
         raise
     except Exception as e:
-        # OpenAI API 호출 중 발생하는 기타 오류
         raise Exception(f"OpenAI 임베딩 생성 중 오류 발생: {e}")
 
 
@@ -70,30 +65,38 @@ def get_or_create_collection():
     if pinecone_index_instance is not None:
         return None if pinecone_index_instance is False else pinecone_index_instance
     
+    # 2. 환경 변수를 함수 내부에서 다시 읽어와서 확실하게 체크합니다.
     PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+    index_name = os.getenv("PINECONE_INDEX_NAME")
     
-    # 2. 환경 변수 체크 (배포 시작을 막지 않고, 기능만 비활성화)
-    if not PINECONE_API_KEY or not PINECONE_INDEX_NAME:
-        print("--- [경고] 필수 Pinecone 환경 변수(API_KEY, INDEX_NAME)가 설정되지 않았습니다. 벡터 DB 기능이 비활성화됩니다. ---")
+    # 3. 환경 변수 체크 및 디버깅 로그 출력
+    is_key_set = bool(PINECONE_API_KEY)
+    is_name_set = bool(index_name)
+
+    print(f"--- [Pinecone Debug] API_KEY 설정됨: {is_key_set} ---")
+    print(f"--- [Pinecone Debug] INDEX_NAME 설정됨: {is_name_set}, 값: {index_name} ---")
+
+    if not is_key_set or not is_name_set:
+        print("--- [경고] 필수 Pinecone 환경 변수(API_KEY 또는 INDEX_NAME) 중 하나가 누락되었습니다. 벡터 DB 기능이 비활성화됩니다. ---")
         pinecone_index_instance = False # 실패 기록 캐시
         return None
 
     try:
-        # 3. Pinecone 클라이언트 초기화
+        # 4. Pinecone 클라이언트 초기화
         pc = Pinecone(api_key=PINECONE_API_KEY)
         
-        # 4. 인덱스 존재 여부 확인 및 생성
-        if PINECONE_INDEX_NAME not in pc.list_indexes().names:
-            print(f"Pinecone 인덱스 '{PINECONE_INDEX_NAME}'가 존재하지 않아 새로 생성합니다.")
+        # 5. 인덱스 존재 여부 확인 및 생성
+        if index_name not in pc.list_indexes().names:
+            print(f"Pinecone 인덱스 '{index_name}'가 존재하지 않아 새로 생성합니다.")
             pc.create_index(
-                name=PINECONE_INDEX_NAME, 
+                name=index_name, 
                 dimension=EMBEDDING_DIMENSION, 
                 metric='cosine',
                 spec=ServerlessSpec(cloud='aws', region='us-west-2')
             )
 
-        # 5. 인덱스 연결 및 캐시 저장
-        index = pc.Index(PINECONE_INDEX_NAME)
+        # 6. 인덱스 연결 및 캐시 저장
+        index = pc.Index(index_name)
         pinecone_index_instance = index
         return index
 
@@ -160,7 +163,7 @@ def query_similar_messages(
         return {"documents": [], "metadatas": []}
         
     try:
-        print(f"'{PINECONE_INDEX_NAME}' 인덱스에서 관련 문서를 검색합니다...")
+        print(f"벡터 DB에서 관련 문서를 검색합니다...")
         
         # 1. 쿼리 임베딩 생성
         query_embedding = _get_embedding(query)
