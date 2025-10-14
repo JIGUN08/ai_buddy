@@ -14,6 +14,10 @@ EMBEDDING_DIMENSION = 1024
 # OpenAI 클라이언트 인스턴스를 저장할 변수 (지연 초기화)
 client_openai = None
 
+# Pinecone 인덱스 인스턴스를 캐시할 전역 변수 (초기화 실패 방지)
+# None: 초기화되지 않음, False: 초기화 시도 중 오류 발생/환경 변수 누락
+pinecone_index_instance = None 
+
 def _get_openai_client() -> OpenAI:
     """
     OpenAI 클라이언트를 지연 초기화합니다.
@@ -32,20 +36,28 @@ def _get_openai_client() -> OpenAI:
 def get_or_create_collection():
     """
     Pinecone 클라이언트를 초기화하고 인덱스 객체를 반환합니다.
-    환경 변수 누락 시 치명적인 오류 대신 None을 반환하여 Gunicorn 시작 실패를 방지합니다.
+    환경 변수 누락 또는 연결 오류 시 None을 반환하고 그 결과를 캐시합니다.
     """
+    global pinecone_index_instance
+
+    # 1. 이미 초기화되었거나 실패한 기록이 있으면 캐시된 값을 반환합니다.
+    if pinecone_index_instance is not None:
+        # False는 이전에 초기화에 실패했음을 의미합니다.
+        return None if pinecone_index_instance is False else pinecone_index_instance
+    
     PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
     
-    # 1. Pinecone 환경 변수 체크 (치명적 오류 대신 None 반환)
+    # 2. Pinecone 환경 변수 체크 (치명적 오류 대신 캐시 설정 후 None 반환)
     if not PINECONE_API_KEY or not PINECONE_INDEX_NAME:
         print("--- [경고] 필수 Pinecone 환경 변수(API_KEY 또는 INDEX_NAME)가 설정되지 않았습니다. 벡터 DB 기능이 비활성화됩니다. ---")
+        pinecone_index_instance = False # 실패 기록을 남깁니다.
         return None
 
     try:
-        # 2. Pinecone 클라이언트 초기화
+        # 3. Pinecone 클라이언트 초기화
         pc = Pinecone(api_key=PINECONE_API_KEY)
         
-        # 3. 인덱스 존재 여부 확인 및 생성
+        # 4. 인덱스 존재 여부 확인 및 생성
         if PINECONE_INDEX_NAME not in pc.list_indexes().names:
             print(f"Pinecone 인덱스 '{PINECONE_INDEX_NAME}'가 존재하지 않아 새로 생성합니다.")
             pc.create_index(
@@ -55,16 +67,20 @@ def get_or_create_collection():
                 spec=ServerlessSpec(cloud='aws', region='us-west-2')
             )
 
-        # 4. 인덱스 연결
-        return pc.Index(PINECONE_INDEX_NAME)
+        # 5. 인덱스 연결 및 캐시 저장
+        index = pc.Index(PINECONE_INDEX_NAME)
+        pinecone_index_instance = index
+        return index
 
     except ApiException as e:
         # API 키가 유효하지 않거나 연결 문제가 있을 경우
         print(f"--- Pinecone API 연결/인증 오류이 발생했습니다. 벡터 DB 비활성화: {e} ---")
+        pinecone_index_instance = False # 실패 기록을 남깁니다.
         return None
     except Exception as e:
         # 기타 모든 예외를 잡고 None 반환하여 프로세스 종료를 방지
-        print(f"--- Pinecone 초기화 중 알 수 없는 오류이 발생했습니다: {e} ---")
+        print(f"--- Pinecone 초기화 중 알 수 없는 오류이 발생했습니다. 벡터 DB 비활성화: {e} ---")
+        pinecone_index_instance = False # 실패 기록을 남깁니다.
         return None
 
 
