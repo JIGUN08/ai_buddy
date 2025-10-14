@@ -1,10 +1,10 @@
 import os
 import json
-from pinecone import Pinecone, ServerlessSpec
-from openai import OpenAI, AuthenticationError # AuthenticationError 임포트 추가
+from pinecone import Pinecone, ServerlessSpec, ApiException # ApiException 임포트 추가
+from openai import OpenAI, AuthenticationError 
 from typing import List, Dict, Union
 
-# Pinecone 환경 변수 (초기화 실패 방지를 위해 전역 변수에서 제거하지 않고 유지)
+# Pinecone 환경 변수 (전역 변수로 유지하되, 함수 내에서 안전하게 처리)
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
 
 # 임베딩 모델 설정
@@ -30,16 +30,19 @@ def _get_openai_client() -> OpenAI:
     return client_openai
 
 def get_or_create_collection():
-    """Pinecone 클라이언트를 초기화하고 인덱스 객체를 반환합니다."""
+    """
+    Pinecone 클라이언트를 초기화하고 인덱스 객체를 반환합니다.
+    환경 변수 누락 시 치명적인 오류 대신 None을 반환하여 Gunicorn 시작 실패를 방지합니다.
+    """
     PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
     
-    # 1. Pinecone 환경 변수 체크
+    # 1. Pinecone 환경 변수 체크 (치명적 오류 대신 None 반환)
     if not PINECONE_API_KEY or not PINECONE_INDEX_NAME:
-        raise EnvironmentError("필수 Pinecone 환경 변수(PINECONE_API_KEY, PINECONE_INDEX_NAME)가 설정되지 않았습니다.")
+        print("--- [경고] 필수 Pinecone 환경 변수(API_KEY 또는 INDEX_NAME)가 설정되지 않았습니다. 벡터 DB 기능이 비활성화됩니다. ---")
+        return None
 
     try:
         # 2. Pinecone 클라이언트 초기화
-        # 클라이언트 초기화는 이 함수 호출 시점에만 발생합니다.
         pc = Pinecone(api_key=PINECONE_API_KEY)
         
         # 3. 인덱스 존재 여부 확인 및 생성
@@ -55,10 +58,14 @@ def get_or_create_collection():
         # 4. 인덱스 연결
         return pc.Index(PINECONE_INDEX_NAME)
 
+    except ApiException as e:
+        # API 키가 유효하지 않거나 연결 문제가 있을 경우
+        print(f"--- Pinecone API 연결/인증 오류이 발생했습니다. 벡터 DB 비활성화: {e} ---")
+        return None
     except Exception as e:
-        # Gunicorn이 시작될 때 이 함수가 호출되면, 이 예외가 status 1 종료를 유발합니다.
-        print(f"--- Pinecone 초기화 중 오류이 발생했습니다: {e} ---")
-        raise
+        # 기타 모든 예외를 잡고 None 반환하여 프로세스 종료를 방지
+        print(f"--- Pinecone 초기화 중 알 수 없는 오류이 발생했습니다: {e} ---")
+        return None
 
 
 def _get_embedding(text: str) -> List[float]:
@@ -77,6 +84,7 @@ def _get_embedding(text: str) -> List[float]:
     except EnvironmentError as e:
         # 환경 변수 누락으로 인한 초기화 실패를 명확히 알립니다.
         print(f"--- 임베딩 생성 실패: {e} ---")
+        # 임베딩 실패 시 None 대신 예외를 다시 발생시켜 upsert/query 로직이 실패하도록 유도
         raise
     except Exception as e:
         print(f"--- OpenAI API 호출 중 오류 발생: {e} ---")
@@ -87,6 +95,11 @@ def upsert_message(pinecone_index, message_obj):
     """
     RDB ChatMessage 객체를 임베딩하여 Pinecone 인덱스에 저장(Upsert)합니다.
     """
+    # Pinecone 인덱스가 초기화되지 않은 경우 (None) 작업을 건너뜁니다.
+    if pinecone_index is None:
+        print("--- Pinecone 인덱스가 설정되지 않아 upsert를 건너뜁니다. ---")
+        return
+        
     try:
         user_id = str(message_obj.user.id)
         message_id = str(message_obj.id)
@@ -124,6 +137,11 @@ def query_similar_messages(
     """
     Pinecone에서 쿼리와 관련된 문서를 검색합니다.
     """
+    # Pinecone 인덱스가 초기화되지 않은 경우 (None) 빈 결과를 반환합니다.
+    if pinecone_index is None:
+        print("--- Pinecone 인덱스가 설정되지 않아 문서 검색을 건너뛰고 빈 결과를 반환합니다. ---")
+        return {"documents": [], "metadatas": []}
+        
     try:
         print(f"'{PINECONE_INDEX_NAME}' 인덱스에서 관련 문서를 검색합니다...")
         
