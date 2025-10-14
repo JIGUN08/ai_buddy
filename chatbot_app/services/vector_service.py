@@ -120,7 +120,10 @@ def upsert_message(pinecone_index, message_obj):
         return
         
     try:
-        user_id = str(message_obj.user.id)
+        # **[수정] Pinecone에 저장할 때는 RDB의 Primary Key(정수) 대신, 
+        # 사용자가 설정한 로그인 ID(username/email)를 사용합니다.
+        # 이렇게 하면 Pinecone 콘솔에서 '1' 대신 'user@example.com'과 같이 명확하게 보입니다.**
+        user_identifier = str(message_obj.user.username)
         message_id = str(message_obj.id)
         
         # 1. 임베딩 생성
@@ -130,7 +133,7 @@ def upsert_message(pinecone_index, message_obj):
         metadata = {
             "text": message_obj.message,
             "speaker": "user" if message_obj.is_user else "ai",
-            "user_id": user_id, 
+            "user_id": user_identifier, # 이제 로그인 ID(username)가 저장됩니다.
             "timestamp": message_obj.timestamp.isoformat()
         }
         
@@ -153,7 +156,8 @@ def upsert_message(pinecone_index, message_obj):
 
 
 def query_similar_messages(
-    pinecone_index, query: str, user_id: int, n_results: int = 5
+    # **[수정] 이제 정수 ID 대신 문자열 ID(username)를 필터링에 사용합니다.**
+    pinecone_index, query: str, user_identifier: str, n_results: int = 5
 ) -> Dict[str, Union[List[str], List[Dict]]]:
     """
     Pinecone에서 쿼리와 관련된 문서를 검색하고 ChatService의 예상 형식으로 반환합니다.
@@ -172,7 +176,8 @@ def query_similar_messages(
         results = pinecone_index.query(
             vector=query_embedding,
             top_k=n_results,
-            filter={"user_id": str(user_id)}, # user_id는 upsert 시 문자열로 저장
+             # **[수정] 저장된 문자열 ID(username)로 필터링합니다.**
+            filter={"user_id": user_identifier}, 
             include_metadata=True
         )
 
@@ -184,7 +189,8 @@ def query_similar_messages(
             
             metadata = {
                 'speaker': match.metadata.get('speaker', 'unknown'),
-                'user_id': match.metadata.get('user_id'),
+                # metadata.user_id는 이제 문자열 username입니다.
+                'user_id': match.metadata.get('user_id'), 
                 'timestamp': match.metadata.get('timestamp')
             }
             
