@@ -6,7 +6,7 @@ from django.utils import timezone
 from ..models import ChatMessage, UserAttribute, UserActivity, ActivityAnalytics, UserRelationship
 from ..services.context_service import get_activity_recommendation, search_activities_for_context
 from ..services.memory_service import extract_and_save_user_context_data
-from ..services.finetuning_service import build_finetuning_system_prompt
+from ..services.finetuning_service import FinetuningService  # <-- build_finetuning_system_prompt 대신 FinetuningService 클래스를 직접 임포트
 from ..services import vector_service
 
 def process_chat_interaction(request, user_message_text):
@@ -17,6 +17,10 @@ def process_chat_interaction(request, user_message_text):
     bot_message_text = "죄송합니다. API 응답을 가져오는 데 실패했습니다."
     explanation = ""
     bot_message_obj = None
+    final_system_prompt = ""
+    finetuning_system_prompt = ""
+    names_to_replace = []
+    relationships = []
 
     try:
         api_key = os.environ.get("OPENAI_API_KEY")
@@ -30,18 +34,21 @@ def process_chat_interaction(request, user_message_text):
         
         # 1. 컨텍스트 생성
         time_contexts = _get_time_contexts(history)
-        memory_contexts = _get_memory_contexts(user, user_message_text)
+        # memory_contexts 외에 익명화에 필요한 데이터도 반환받도록 수정
+        memory_contexts, names_to_replace, relationships = _get_memory_contexts(user, user_message_text) 
         
         # 2. 시스템 프롬프트 및 메시지 준비
-        final_system_prompt = _build_final_system_prompt(user, time_contexts, memory_contexts)
+        # finetuning_system_prompt 생성을 위해 relationships 데이터를 전달
+        final_system_prompt, finetuning_system_prompt = _build_final_system_prompt(user, time_contexts, memory_contexts, relationships)
         messages = _prepare_llm_messages(final_system_prompt, history, user_message_text)
 
         # 3. LLM API 호출
         response_json = _call_openai_api(model_to_use, headers, messages)
         
-        # 4. 응답 처리 및 저장
+        # 4. 응답 처리 및 저장 (파인튜닝 로깅에 필요한 모든 데이터를 전달)
         bot_message_text, explanation, bot_message_obj = _finalize_chat_interaction(
-            request, user_message_text, response_json, history, api_key
+            request, user_message_text, response_json, history, api_key, 
+            final_system_prompt, finetuning_system_prompt, names_to_replace, relationships
         )
 
     except requests.exceptions.RequestException as e:
@@ -86,24 +93,32 @@ def _get_time_contexts(history):
     return current_time_context, time_awareness_context
 
 def _get_memory_contexts(user, user_message_text):
-    """사용자의 기억과 관련된 모든 컨텍스트를 종합하여 반환합니다."""
+    """사용자의 기억과 관련된 모든 컨텍스트를 종합하여 반환합니다. (익명화 데이터 포함)"""
+    
+    # 익명화에 필요한 사용자 이름 수집
+    names_to_replace = {user.username}
+    try:
+        # 사용자 기본 이름 외에 선호 이름이 있다면 추가
+        preferred_name_obj = UserAttribute.objects.filter(user=user, fact_type='이름').last()
+        if preferred_name_obj and preferred_name_obj.content:
+            names_to_replace.add(preferred_name_obj.content)
+    except Exception as e:
+        print(f"--- Error retrieving preferred name for logging: {e} ---")
+        pass
+
     # 0. 벡터 검색 컨텍스트
     vector_search_context = ""
     try:
-        # [수정] Pinecone 인덱스 가져오기 (get_or_create_collection -> get_pinecone_index)
-        pinecone_index = vector_service.get_pinecone_index() 
+        # [FIX] get_pinecone_index 대신 get_or_create_collection 사용
+        pinecone_index = vector_service.get_or_create_collection()
         
-        # [수정] Pinecone 버전의 query_similar_messages 호출 (인덱스 전달)
-        # Pinecone query_similar_messages는 이미 문자열 리스트를 반환합니다.
         retrieved_docs = vector_service.query_similar_messages(pinecone_index, user_message_text, user.id, n_results=5)
         
         print(f"--- [디버그] Raw retrieved_docs from vector_service: {retrieved_docs} ---")
         
-        # [수정] 반환된 문자열 리스트를 사용하여 컨텍스트 생성
         if retrieved_docs:
             past_conversations = []
             for doc in retrieved_docs:
-                # doc는 이미 "사용자: 메시지" 또는 "AI: 메시지" 형태의 문자열
                 truncated_doc = (doc[:150] + '...') if len(doc) > 150 else doc
                 past_conversations.append(truncated_doc)
             
@@ -163,8 +178,9 @@ def _get_memory_contexts(user, user_message_text):
     except Exception as e:
         print(f"--- Could not build activity analytics context due to an error: {e} ---")
 
-    # 4. 인간관계 컨텍스트
+    # 4. 인간관계 컨텍스트 및 익명화에 사용할 관계 데이터 수집
     user_relationship_context = ""
+    relationship_list_for_finetuning = []
     try:
         user_relationships = UserRelationship.objects.filter(user=user)
         if user_relationships.exists():
@@ -192,6 +208,13 @@ def _get_memory_contexts(user, user_message_text):
 
             relationship_strings = []
             for key, data in grouped_relationships.items():
+                # Finetuning 로깅을 위한 데이터 형식 생성
+                relationship_list_for_finetuning.append({
+                    'name': data['name'],
+                    # 관계 유형을 문자열 리스트로 전달하여 FinetuningService에서 처리
+                    'type': ', '.join(data['relationship_type']) 
+                })
+
                 rel_parts = [f"이름: {data['name']}", f"serial_code: {data['serial_code']}"]
                 if data['disambiguator'] != '없음':
                     rel_parts.append(f"식별자: {data['disambiguator']}")
@@ -207,7 +230,7 @@ def _get_memory_contexts(user, user_message_text):
     except Exception as e:
         print(f"--- Could not build user relationship context due to an error: {e} ---")
 
-    return {
+    memory_contexts = {
         "vector_search": vector_search_context,
         "attributes": user_attribute_context,
         "activity": activity_context,
@@ -215,7 +238,10 @@ def _get_memory_contexts(user, user_message_text):
         "relationship": user_relationship_context,
     }
 
-def _build_final_system_prompt(user, time_contexts, memory_contexts):
+    return memory_contexts, list(names_to_replace), relationship_list_for_finetuning
+
+
+def _build_final_system_prompt(user, time_contexts, memory_contexts, relationships):
     """모든 컨텍스트를 조합하여 최종 시스템 프롬프트를 생성합니다."""
     current_time_context, time_awareness_context = time_contexts
     affinity = user.profile.affinity_score
@@ -234,7 +260,9 @@ def _build_final_system_prompt(user, time_contexts, memory_contexts):
 
     print("--- [디버그] 모든 컨텍스트 통합 완료 ---")
 
-    finetuning_system_prompt = build_finetuning_system_prompt(user)
+    # FinetuningService 클래스를 사용하여 기본 페르소나 프롬프트 생성 (relationships 전달)
+    finetuning_system_prompt = FinetuningService.build_finetuning_system_prompt(user.username, relationships)
+
     rag_instructions_prompt = (
         "\n## 대화 처리 계층 구조 (3단계 정보, 분석 및 관계) ##\n"
         "너는 답변을 생성할 때 다음 세 가지 정보, 한 가지 분석 정보, 그리고 한 가지 관계 정보를 계층적으로 사용해야 해.\n\n"
@@ -258,13 +286,16 @@ def _build_final_system_prompt(user, time_contexts, memory_contexts):
     print("\n" + "="*20 + " LLM 전달 최종 프롬프트 시작 " + "="*20)
     print(final_prompt)
     print("="*20 + " LLM 전달 최종 프롬프트 끝 " + "="*22 + "\n")
-    return final_prompt
+    
+    return final_prompt, finetuning_system_prompt # 최종 프롬프트와 페르소나 프롬프트를 모두 반환
 
 def _prepare_llm_messages(final_system_prompt, history, user_message_text):
     """API 요청을 위한 메시지 리스트를 준비합니다."""
     messages = [{'role': 'system', 'content': final_system_prompt}]
     recent_history = history[:10]
     for chat in reversed(recent_history):
+        # AI 응답은 JSON 형식이지만, LLM에 전달할 때는 'answer' 키의 텍스트만 추출해서 전달해야 함.
+        # 단, 현재 저장된 message 필드가 이미 텍스트라고 가정하고 진행.
         role = "user" if chat.is_user else "assistant"
         messages.append({'role': role, 'content': chat.message})
     messages.append({'role': 'user', 'content': user_message_text})
@@ -273,13 +304,19 @@ def _prepare_llm_messages(final_system_prompt, history, user_message_text):
 def _call_openai_api(model_to_use, headers, messages):
     """OpenAI API를 호출하고 응답 JSON을 반환합니다."""
     print(f"--- Using Model: {model_to_use} ---")
-    data = { "model": model_to_use, "messages": messages, "temperature": 0.7, "top_p": 0.9, "response_format": {"type": "json_object"} }
+    data = { 
+        "model": model_to_use, 
+        "messages": messages, 
+        "temperature": 0.7, 
+        "top_p": 0.9, 
+        "response_format": {"type": "json_object"} 
+    }
     response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data)
     response.raise_for_status()
     return response.json()
 
-def _finalize_chat_interaction(request, user_message_text, response_json, history, api_key):
-    """성공적인 LLM 응답을 처리하고 관련 데이터를 RDB와 벡터 DB에 저장합니다."""
+def _finalize_chat_interaction(request, user_message_text, response_json, history, api_key, final_system_prompt, finetuning_system_prompt, names_to_replace, relationships):
+    """성공적인 LLM 응답을 처리하고 관련 데이터를 RDB와 벡터 DB에 저장하며, 파인튜닝 로깅을 수행합니다."""
     user = request.user
     user_profile = user.profile
 
@@ -287,20 +324,37 @@ def _finalize_chat_interaction(request, user_message_text, response_json, histor
     bot_message_text = content_from_llm.get('answer', '').strip()
     explanation = content_from_llm.get('explanation', '').strip()
 
-    # [수정] Pinecone 인덱스 가져오기
-    # vector_service.py에 정의한 get_pinecone_index 함수를 사용해야 합니다.
-    pinecone_index = vector_service.get_pinecone_index() 
+    # [FIX] get_pinecone_index 대신 get_or_create_collection 사용
+    pinecone_index = vector_service.get_or_create_collection()
 
     # 1. 사용자 메시지 RDB에 저장 및 벡터 DB에 업서트
     user_message_obj = ChatMessage.objects.create(user=user, message=user_message_text, is_user=True)
-    # [수정] upsert_message 호출 인자에 Pinecone 인덱스 객체를 전달
-    vector_service.upsert_message(pinecone_index, user_message_obj) # <--- 사용자 질문 저장
+    vector_service.upsert_message(pinecone_index, user_message_obj)
 
     # 2. AI 응답 RDB에 저장 및 벡터 DB에 업서트
     bot_message_obj = ChatMessage.objects.create(user=user, message=bot_message_text, is_user=False)
-    # [수정] upsert_message 호출 인자에 Pinecone 인덱스 객체를 전달
-    vector_service.upsert_message(pinecone_index, bot_message_obj) # <--- AI 답변 저장
+    vector_service.upsert_message(pinecone_index, bot_message_obj)
 
-    # ... (호감도 업데이트, 속성 추출 및 저장 로직 유지) ...
+    # 3. 사용자 컨텍스트 데이터 추출 및 저장
+    # user_message_text와 bot_message_text를 함께 전달하여 문맥을 파악하도록 함
+    full_conversation_text = f"사용자: {user_message_text}\nAI: {bot_message_text}"
+    extract_and_save_user_context_data(user, full_conversation_text, api_key)
+
+    # 4. 호감도 업데이트 (예시 로직)
+    # 이 부분은 현재 로직을 유지합니다. 실제 호감도 업데이트 로직은 memory_service에 구현될 수 있습니다.
+    # user_profile.affinity_score += 1 # 예시
+    # user_profile.save()
+
+    # 5. 파인튜닝 데이터 로깅 (익명화 및 저장)
+    try:
+        FinetuningService.log_finetuning_data(
+            user_message_text=user_message_text, 
+            bot_message_text=bot_message_text, 
+            system_prompt=finetuning_system_prompt, # 기본 페르소나 프롬프트
+            names_to_replace=names_to_replace, 
+            relationships=relationships
+        )
+    except Exception as e:
+        print(f"--- [Finetuning Log Error] 파인튜닝 로깅 실패: {e} ---")
 
     return bot_message_text, explanation, bot_message_obj
