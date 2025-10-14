@@ -1,7 +1,7 @@
 import os
 import json
 from pinecone import Pinecone, ServerlessSpec # 기존 import는 유지
-from pinecone.exceptions import ApiException # ApiException을 정확한 위치에서 가져옵니다.
+from pinecone.exceptions import PineconeApiException # ApiException을 정확한 위치에서 가져옵니다.
 from openai import OpenAI, AuthenticationError # 필요한 모듈 임포트
 from typing import List, Dict, Union
 
