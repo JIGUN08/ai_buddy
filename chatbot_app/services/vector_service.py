@@ -84,6 +84,13 @@ def get_or_create_collection():
     try:
         # 4. Pinecone 클라이언트 초기화
         pc = Pinecone(api_key=PINECONE_API_KEY)
+
+        # 5. 인덱스 존재 여부 확인 및 생성
+        
+        # **[수정] 'argument of type 'method' is not iterable' 오류를 해결하기 위해 
+        # index names를 가져오는 방식을 명시적으로 분리합니다. (V3 SDK 권장 방식)**
+        index_list = pc.list_indexes()
+        index_names = index_list.names 
         
         # 5. 인덱스 존재 여부 확인 및 생성
         if index_name not in pc.list_indexes().names:
