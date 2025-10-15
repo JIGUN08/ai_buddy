@@ -1,7 +1,7 @@
 import os
 import json
 from pinecone import Pinecone, ServerlessSpec
-from pinecone.exceptions import PineconeApiException, IndexExistsError, NotFoundException
+from pinecone.exceptions import PineconeApiException # IndexExistsError와 NotFoundException 제거
 from openai import OpenAI, AuthenticationError
 from typing import List, Dict, Union
 
@@ -57,7 +57,8 @@ def _get_embedding(text: str) -> List[float]:
 def _initialize_pinecone():
     """
     Pinecone 클라이언트를 초기화하고 인덱스 객체에 연결합니다.
-    (list_indexes() 오류를 우회하기 위해 describe_index_stats()로 연결을 테스트)
+    (API 버전 충돌로 인한 IndexExistsError 및 NotFoundException import 오류를 해결하기 위해
+     PineconeApiException과 상태 코드(status_code)를 사용하도록 로직을 변경합니다.)
     """
     global _pinecone_client, _pinecone_index_instance, _vector_db_enabled, _initialization_attempted
     
@@ -85,31 +86,39 @@ def _initialize_pinecone():
         # 2. 인덱스 객체 생성 (존재 여부와 상관없이 시도)
         index = _pinecone_client.Index(index_name)
         
-        # 3. 연결 테스트: describe_index_stats() 호출을 통해 연결 확인
+        # 3. 연결 테스트: describe_index_stats() 호출을 통해 인덱스 존재 여부 확인
         try:
             stats = index.describe_index_stats()
             # 통계 정보가 성공적으로 반환되면 인덱스가 존재하고 연결도 잘 된 것으로 간주
             print(f"Pinecone 인덱스 '{index_name}'이 존재하며 연결에 성공했습니다. 벡터 수: {stats.total_vector_count}")
         
-        except NotFoundException:
-            # 인덱스가 존재하지 않으면, 이 시점에서 생성
-            print(f"Pinecone 인덱스 '{index_name}'가 존재하지 않아 새로 생성합니다.")
-            
-            # 인덱스 생성 (IndexExistsError를 방지하기 위해 create_index 호출)
-            try:
-                _pinecone_client.create_index(
-                    name=index_name, 
-                    dimension=EMBEDDING_DIMENSION, 
-                    metric='cosine',
-                    spec=ServerlessSpec(cloud='aws', region='us-west-2')
-                )
-            except IndexExistsError:
-                # 매우 드물지만, 동시에 생성 시도가 발생했을 경우의 대비책
-                print(f"인덱스 '{index_name}'가 이미 생성 중이거나 방금 생성되었습니다.")
-                pass
-            
-            # 새로 생성된 인덱스 객체 다시 연결 (최신 상태 보장)
-            index = _pinecone_client.Index(index_name)
+        except ApiException as e:
+            # Index가 없을 때 발생하는 404 NotFoundException을 ApiException으로 포착
+            if e.status_code == 404:
+                print(f"Pinecone 인덱스 '{index_name}'가 존재하지 않아 새로 생성합니다 (404 Not Found).")
+                
+                # 인덱스 생성
+                try:
+                    _pinecone_client.create_index(
+                        name=index_name, 
+                        dimension=EMBEDDING_DIMENSION, 
+                        metric='cosine',
+                        spec=ServerlessSpec(cloud='aws', region='us-west-2')
+                    )
+                except ApiException as create_e:
+                    # Index가 이미 존재할 때 발생하는 409 Conflict (IndexExistsError) 포착
+                    if create_e.status_code == 409:
+                        print(f"인덱스 '{index_name}'가 이미 생성 중이거나 방금 생성되었습니다 (409 Conflict).")
+                    else:
+                        # 404, 409가 아닌 다른 API 오류는 다시 발생시켜 외부 catch 블록에서 처리
+                        raise create_e 
+                
+                # 새로 생성되거나 이미 존재한 인덱스 객체 다시 연결 (최신 상태 보장)
+                index = _pinecone_client.Index(index_name)
+                
+            else:
+                # 404가 아닌 다른 API 오류(예: 401 인증 실패)는 치명적인 오류로 처리
+                raise e 
             
         # 4. 인덱스 객체 최종 캐시 및 성공 상태 설정
         _pinecone_index_instance = index
@@ -118,6 +127,7 @@ def _initialize_pinecone():
 
 
     except ApiException as e:
+        # 401 등 모든 Pinecone API 연결/인증 오류는 여기서 포착
         print(f"--- Pinecone API 연결/인증 오류가 발생했습니다. 벡터 DB 비활성화: {e} ---")
         _vector_db_enabled = False 
     except Exception as e:
