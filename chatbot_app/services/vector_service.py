@@ -19,7 +19,8 @@ client_openai = None
 # Pinecone 클라이언트 및 인덱스 관리 변수
 _pinecone_client = None
 _pinecone_index_instance = None
-_vector_db_enabled = False # 벡터 DB 기능 활성화 상태 플래그 (가장 중요)
+_vector_db_enabled = False # 벡터 DB 기능 활성화 상태 플래그
+_initialization_attempted = False # 초기화 시도 여부를 기록하는 새로운 플래그
 
 # ----------------- 유틸리티 함수 -----------------
 
@@ -55,12 +56,13 @@ def _get_embedding(text: str) -> List[float]:
 
 def _initialize_pinecone():
     """
-    **최우선적으로 Pinecone 클라이언트를 초기화하고 상태를 결정합니다.**
-    이 함수는 서버 시작 시 단 한 번만 호출되어야 합니다.
+    Pinecone 클라이언트를 초기화하고 상태를 결정하는 실제 로직 함수입니다.
     """
-    global _pinecone_client, _pinecone_index_instance, _vector_db_enabled
+    global _pinecone_client, _pinecone_index_instance, _vector_db_enabled, _initialization_attempted
+    
+    _initialization_attempted = True # 시도 시작
 
-    # 환경 변수를 함수 내부에서 다시 읽어와서 확실하게 체크합니다.
+    # 환경 변수 체크
     PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
     index_name = os.getenv("PINECONE_INDEX_NAME")
     
@@ -76,11 +78,10 @@ def _initialize_pinecone():
         return
 
     try:
-        # 1. Pinecone 클라이언트 초기화 (가장 먼저 시도)
+        # 1. Pinecone 클라이언트 초기화 
         _pinecone_client = Pinecone(api_key=PINECONE_API_KEY)
         
         # 2. 인덱스 존재 여부 확인 및 생성
-        # list_indexes() 호출 문법은 정확하나, 환경 오류를 피하기 위해 간소화합니다.
         index_names = _pinecone_client.list_indexes().names
 
         if index_name not in index_names:
@@ -101,12 +102,10 @@ def _initialize_pinecone():
         print(f"--- Pinecone API 연결/인증 오류이 발생했습니다. 벡터 DB 비활성화: {e} ---")
         _vector_db_enabled = False 
     except Exception as e:
-        # 이 부분이 반복되는 'method is not iterable' 오류를 포착합니다.
+        # 환경 충돌 오류를 포착합니다.
         print(f"--- Pinecone 초기화 중 알 수 없는 오류가 발생했습니다. 벡터 DB 비활성화: {e} ---")
         _vector_db_enabled = False
         
-# 서버 시작 시 Pinecone 초기화 시도
-_initialize_pinecone()
         
 def is_vector_db_enabled():
     """벡터 DB 사용 가능 여부 반환"""
@@ -114,25 +113,38 @@ def is_vector_db_enabled():
 
 def get_or_create_collection():
     """
-    초기화된 Pinecone 인덱스 객체를 반환합니다.
+    초기화된 Pinecone 인덱스 객체를 반환합니다. (지연 초기화 로직 적용)
     """
+    global _initialization_attempted
+    
+    # 1. 초기화를 시도한 적이 없다면, 지금 시도합니다.
+    if not _initialization_attempted:
+        print("--- 벡터 DB 최초 접근 시도: Pinecone 지연 초기화 실행 ---")
+        _initialize_pinecone()
+    
+    # 2. 초기화 결과에 따라 인덱스 객체를 반환합니다.
     if not is_vector_db_enabled():
         return None
         
     return _pinecone_index_instance
 
+# (주의: 파일 하단의 _initialize_pinecone() 즉시 호출은 삭제되었습니다.)
+
 # ----------------- 벡터 DB 작업 -----------------
+# (upsert_message와 query_similar_messages는 변경 없음)
 
 def upsert_message(pinecone_index, message_obj):
     """
     RDB ChatMessage 객체를 임베딩하여 Pinecone 인덱스에 저장(Upsert)합니다.
     """
+    # 호출 시점에 get_or_create_collection()으로 인덱스를 새로 가져와야 지연 초기화가 작동합니다.
+    pinecone_index = get_or_create_collection() 
+    
     if pinecone_index is None:
         print("--- [경고] 벡터 DB 비활성화 상태로 upsert_message 스킵 ---")
         return
         
     try:
-        # 사용자 ID는 RDB의 user.username을 사용합니다.
         user_identifier = str(message_obj.user.username) 
         message_id = str(message_obj.id)
         
@@ -166,11 +178,15 @@ def upsert_message(pinecone_index, message_obj):
 
 
 def query_similar_messages(
-    pinecone_index, query: str, user_identifier: str, n_results: int = 5
+    # 함수 내부에서 get_or_create_collection()을 호출하여 지연 초기화를 트리거합니다.
+    pinecone_index_dummy, query: str, user_identifier: str, n_results: int = 5
 ) -> Dict[str, Union[List[str], List[Dict]]]:
     """
     Pinecone에서 쿼리와 관련된 문서를 검색하고 ChatService의 예상 형식으로 반환합니다.
     """
+    # 호출 시점에 get_or_create_collection()으로 인덱스를 새로 가져와야 지연 초기화가 작동합니다.
+    pinecone_index = get_or_create_collection() 
+    
     if pinecone_index is None:
         print("--- [경고] 벡터 DB 비활성화 상태로 query_similar_messages 스킵 ---")
         return {"documents": [], "metadatas": []}
